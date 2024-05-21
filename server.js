@@ -1,83 +1,80 @@
 const venom = require('venom-bot');
 const express = require('express');
 const app = express();
-const qrCode = require('qrcode-terminal');
-const fs = require('fs');
-
-
-let client;
 
 app.use(express.json());
-app.use('/static', express.static('public'));
 
-venom
- .create({
-    session: 'nome_da_sessao', // nome da sessão 
-    puppeteerOptions: {
-      timeout: 60000, // Defina o tempo limite como 0 para desativar ou substitua por um valor em milissegundos
-    },
- },
-{updatesLog:false,disableWelcome: true},
-    (base64Qrimg)=> {
-                // Escrevendo o buffer em um arquivo
-        const base64Data = base64Qrimg.replace(/^data:image\/png;base64,/, '');
-        fs.writeFile('public/qrcode.png', base64Data, 'base64', (err) => {
-            if (err) {
-                console.error('Erro ao escrever o arquivo:', err);
-                return;
-            }
-            console.log('Arquivo salvo com sucesso!');
-        });
-        })
- .then((cli) => {
-    client = cli;
-    start(client);
+let clientInstance;
+let qrCodeData = '';
+let qrCodeGenerated = false;
 
- }) 
-.catch((erro) => {
-    console.log(erro);
- });
-
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/public/qrcode.html');
-});
-
-app.post('/send-message', async (req, res) => {
-    const { phone, message } = req.body;
-
-    try {
-        await client.sendText(phone + '@c.us', message);
-        res.status(200).json({ status: 'success', message: 'Mensagem enviada com sucesso.' });
-    } catch (error) {
-        res.status(500).json({ status: 'error', message: error });
-    }
-});
-
-// Rota para servir o arquivo do QR code
-app.get('/qrcode.png', (req, res) => {
-    try {
-        // Lendo o arquivo do QR code
-        const qrCodeImage = fs.readFileSync('qrcode.png');
-console.log(qrCodeImage)
-
-        // Enviando a imagem como resposta
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        res.end(qrCodeImage, 'binary');
-    } catch (error) {
-        console.error('Erro ao ler o arquivo do QR code:', error);
-        res.status(500).send('Erro ao carregar o QR code.');
-    }
-});
-
-
-app.listen(2000, () => {
-    console.log('Aplicativo ouvindo na porta 2000!');
-});
-
-function start(client) {
-    client.onMessage((message) => {
-        if (message.body === 'oi' && message.isGroupMsg === false) {
-            client.sendText(message.from, 'Olá, bem vindo ao nosso serviço!');
+function initializeVenom() {
+  return venom
+    .create(
+      'sessionName',
+      (base64Qr, asciiQR) => {
+        if (!qrCodeGenerated) {
+          qrCodeData = base64Qr;
+          console.log('QR Code recebido', asciiQR); // Para debug
+          qrCodeGenerated = true;
         }
+      },
+      undefined,
+      { logQR: false }
+    )
+    .then(client => {
+      clientInstance = client;
+      qrCodeGenerated = false;
+      console.log('Cliente iniciado');
+      return client;
+    })
+    .catch(err => {
+      console.log('Erro ao iniciar o cliente', err);
     });
 }
+
+initializeVenom();
+
+app.post('/send-message', async (req, res) => {
+  const { number, message } = req.body;
+
+  try {
+    if (!clientInstance) {
+      throw new Error('Cliente não iniciado');
+    }
+
+    await clientInstance.sendText(number + '@c.us', message);
+    res.status(200).send({ status: 'Message sent successfully' });
+  } catch (error) {
+    res.status(500).send({ status: 'Error sending message', error: error.message });
+  }
+});
+
+app.get('/get-qrcode', (req, res) => {
+  if (qrCodeData) {
+    res.status(200).send({ qrCode: qrCodeData });
+  } else {
+    res.status(200).send({ message: 'QR code not available yet, please try again later.' });
+  }
+});
+
+app.get('/status', async (req, res) => {
+  try {
+    if (!clientInstance) {
+      throw new Error('Cliente não iniciado');
+    }
+
+    const isConnected = await clientInstance.isConnected();
+    if (isConnected) {
+      res.status(200).send({ status: 'Logged in' });
+    } else {
+      res.status(200).send({ status: 'Not logged in', qrCode: qrCodeData });
+    }
+  } catch (error) {
+    res.status(500).send({ status: 'Error checking login status', error: error.message });
+  }
+});
+
+app.listen(7000, () => {
+  console.log('API running on port 7000');
+});
